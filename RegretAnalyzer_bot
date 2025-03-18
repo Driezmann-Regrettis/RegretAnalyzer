@@ -1,0 +1,196 @@
+import requests 
+import logging
+import time
+from datetime import datetime, timezone
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+
+METIS_API_URL = "https://andromeda-explorer.metis.io/api"
+COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
+DEXSCREENER_API_URL = "https://api.dexscreener.com/latest/dex/tokens/"
+GROQ_API_URL = "https://api.groq.com/generate"  # Placeholder for Groq API
+GROQ_API_KEY = "??????"
+
+# Function to fetch wallet transactions for any token
+def get_token_transactions(wallet_address, token_address):
+    url = f"{METIS_API_URL}?module=account&action=tokentx&contractaddress={token_address}&address={wallet_address}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.json().get("result", [])
+    return []
+
+from datetime import datetime, timezone
+
+def get_historical_price_range(token_id, contract_address, start_timestamp, end_timestamp):
+    """Haalt historische prijsgegevens op binnen een bepaalde periode."""
+    url = f"{COINGECKO_API_URL}/coins/{token_id}/contract/{contract_address}/market_chart/range"
+    params = {
+        "vs_currency": "usd",
+        "from": start_timestamp,
+        "to": end_timestamp
+    }
+    response = requests.get(url, params=params)
+    data = response.json()
+    
+    if "prices" in data and data["prices"]:
+        return data["prices"]  # Lijst met tuples (timestamp, prijs)
+    else:
+        return None  # Geen data gevonden
+
+def get_token_price_from_dexscreener(token_address):
+    """Fetches the latest token price from DexScreener API."""
+    try:
+        url = f"{DEXSCREENER_API_URL}{token_address}"
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            if "pairs" in data and len(data["pairs"]) > 0:
+                return float(data["pairs"][0]["priceUsd"])
+    except Exception as e:
+        print(f"❌ Error fetching token price from DexScreener: {e}")
+    return None
+
+def get_ai_commentary(profit_or_loss, profit_percentage):
+    """Fetches an AI-generated commentary based on the trading results."""
+    prompt = f"Generate a regretful, sarcastic, and dark humor commentary on a trade result where the profit/loss is {profit_or_loss} USD and the profit percentage is {profit_percentage}%. Make it sting."
+    try:
+        response = requests.post(GROQ_API_URL, json={"prompt": prompt, "api_key": GROQ_API_KEY})
+        if response.status_code == 200:
+            return response.json().get("response", "Oops, something went wrong generating regretful insights!")
+    except Exception as e:
+        print(f"❌ Error fetching AI commentary from Groq: {e}")
+    return "The AI is too ashamed to comment on this one."
+
+def analyze_trading_behavior(wallet_address, token_address):
+    transactions = get_token_transactions(wallet_address, token_address)
+    if not transactions:
+        return "No transactions found for this wallet with the specified token."
+    
+    end_timestamp = int(time.time())  # Huidige tijd
+    start_timestamp = end_timestamp - (5 * 365 * 24 * 60 * 60)  # 5 jaar terug
+    historical_prices = get_historical_price_range("metis-token", "0xdeaddeaddeaddeaddeaddeaddeaddeaddead0000", start_timestamp, end_timestamp)
+    
+    if historical_prices is None:
+        return "⚠️ Geen historische prijsgegevens gevonden."
+    
+    result = "📊 Historische prijzen voor Metis (5 jaar terug):\n"
+    for timestamp, price in historical_prices[:10]:  # Laatste 10 datapunten tonen
+        readable_date = time.strftime('%Y-%m-%d', time.gmtime(timestamp))
+        result += f"📅 {readable_date}: ${price:.2f}\n"
+    
+    return result
+
+    total_tokens_bought = 0
+    total_tokens_sold = 0
+    total_metis_spent = 0
+    total_metis_received = 0
+    total_usd_spent = 0
+    total_usd_earned = 0
+    buy_prices = []
+    sell_prices = []
+
+for tx in transactions:
+        timestamp = int(tx["timeStamp"])
+
+metis_price_at_trade = get_metis_price(timestamp)
+        token_price_at_trade = get_token_price_from_dexscreener(token_address)
+
+        if metis_price_at_trade is None or token_price_at_trade is None:
+            print(f"⚠️ Skipping transaction at {timestamp} - No historical price found.")
+            continue
+
+        token_amount = float(tx["value"]) / (10 ** int(tx.get("tokenDecimal", 18)))
+        metis_spent_or_received = float(tx["value"]) / 10**18
+
+        if tx["to"].lower() == wallet_address.lower():
+            total_tokens_bought += token_amount
+            total_metis_spent += metis_spent_or_received
+            usd_spent_at_buy = metis_spent_or_received * metis_price_at_trade
+            total_usd_spent += usd_spent_at_buy
+            buy_prices.append(usd_spent_at_buy / token_amount if token_amount > 0 else 0)
+        elif tx["from"].lower() == wallet_address.lower():
+            total_tokens_sold += token_amount
+            total_metis_received += metis_spent_or_received
+            usd_earned_at_sell = metis_spent_or_received * metis_price_at_trade
+            total_usd_earned += usd_earned_at_sell
+            sell_prices.append(usd_earned_at_sell / token_amount if token_amount > 0 else 0)
+
+    avg_buy_price = sum(buy_prices) / len(buy_prices) if buy_prices else 0
+    avg_sell_price = sum(sell_prices) / len(sell_prices) if sell_prices else 0
+    holdings = total_tokens_bought - total_tokens_sold
+    profit_or_loss = total_usd_earned - total_usd_spent
+    profit_percentage = ((profit_or_loss / total_usd_spent) * 100) if total_usd_spent > 0 else 0
+    live_metis_price = get_metis_price()
+    live_token_price = get_token_price_from_dexscreener(token_address)
+    ai_commentary = get_ai_commentary(profit_or_loss, profit_percentage)
+
+    return (f"🔍 **Token Trading Analysis for {wallet_address}**\n\n"
+            f"📉 Average Buy Price: ${avg_buy_price:.2f} USD\n"
+            f"💰 Average Sell Price: ${avg_sell_price:.2f} USD\n"
+            f"📌 Current METIS Price: ${live_metis_price:.2f} USD\n"
+            f"📊 Current Token Price: ${live_token_price:.2f} USD\n"
+            f"📥 Total Spent: ${total_usd_spent:.2f} USD\n"
+            f"📤 Total Earned: ${total_usd_earned:.2f} USD\n"
+            f"💼 Current Holdings: {holdings:.2f} Tokens\n"
+            f"📈 Profit/Loss: ${profit_or_loss:.2f} USD ({profit_percentage:.2f}%)\n"
+            f"💀 AI Commentary: {ai_commentary}")
+
+async def start(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    if user_id not in user_data:
+        user_data[user_id] = True
+        welcome_message = (
+            "🎉 Welcome to the Token Analyzer Bot! 🤑\n\n"
+            "I analyze your crypto trading history and tell you how much you've won (or regretted).\n\n"
+            "📌 **Commands you can use:**\n"
+            "- /analyze <wallet_address> - Save your wallet for analysis.\n"
+            "- /token <token_address> - Analyze your trades for a specific token.\n\n"
+            "Let’s see if you’re making it big or just funding someone else’s yacht. 🚀"
+        )
+        await update.message.reply_text(welcome_message)
+    else:
+        await update.message.reply_text("Welcome back! Use /analyze or /token to check your trades.")
+    
+async def analyze(update: Update, context: CallbackContext):
+    if len(context.args) == 0:
+        await update.message.reply_text("Please provide your wallet address. Example: /analyze 0xYourWallet")
+        return
+
+    wallet_address = context.args[0]
+    context.user_data["wallet_address"] = wallet_address
+    await update.message.reply_text("Wallet address saved! Now use /token <token_address> to specify the token you want to analyze.")
+
+async def token(update: Update, context: CallbackContext):
+    if "wallet_address" not in context.user_data:
+        await update.message.reply_text("Please provide your wallet address first using /analyze.")
+        return
+
+if len(context.args) == 0:
+        await update.message.reply_text("Please provide the token address. Example: /token 0xTokenAddress")
+                               
+return
+
+    token_address = context.args[0].strip("<>")
+    
+    if not token_address.startswith("0x") or len(token_address) != 42:
+        await update.message.reply_text("Invalid token address. Please enter a correct Ethereum-based token address.")
+        return
+
+    wallet_address = context.user_data["wallet_address"]
+    analysis = analyze_trading_behavior(wallet_address, token_address)
+    await update.message.reply_text(f"🔍 **Token Trading Analysis for {wallet_address}**\n\n{analysis}")
+
+# Logging
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+
+# Telegram Bot Token
+TELEGRAM_BOT_TOKEN = "??????"
+
+# Application
+app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+app.add_handler(CommandHandler("analyze", analyze))
+app.add_handler(CommandHandler("token", token))
+
+if name == "main":
+    logging.info("Bot is running... 🚀")
+    app.run_polling()
